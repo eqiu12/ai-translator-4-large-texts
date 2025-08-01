@@ -1,7 +1,7 @@
 """WordPress HTML Translator – Streamlit app
 
-Paste a big HTML article (RU or EN), pick a target language (DE/ES/FR/TR) and
-get fully‑translated HTML back with:
+Paste a big HTML article (RU or EN), pick a target language (DE/ES/FR/TR/EN) and
+get fully-translated HTML back with:
   • domain swap (e.g. samokatus.ru → tripsteer.co)
   • currency shortcode swap (rub → usd → label USD)
   • safe chunking + truncation guard
@@ -28,12 +28,12 @@ except ImportError:
 from openai import OpenAI
 
 # ------------- Model & token helpers -------------------------------------------------
-MODEL_TRANSLATE = "gpt-4o"          # or "gpt-4o-mini" / "gpt-4o-128k"
-MODEL_QA        = "gpt-4o"          # keep QA on the same model
-TOKEN_LIMIT = 96_000  # for gpt‑4‑1‑mini
-SAFETY_MARGIN = 0.85  # 15 % headroom
+MODEL_TRANSLATE_DEFAULT = "gpt-4o"  # safe default available to every paid account
+MODEL_QA_DEFAULT = "gpt-4o"
+TOKEN_LIMIT = 32_000  # gpt-4o-128k has more, but 32k is safe for mini
+SAFETY_MARGIN = 0.85  # 15 % headroom
 
-enc = tiktoken.encoding_for_model(MODEL_TRANSLATE)
+enc = tiktoken.encoding_for_model(MODEL_TRANSLATE_DEFAULT)
 client = OpenAI()
 
 
@@ -47,10 +47,10 @@ def count_tokens(text: str) -> int:
 def build_system_prompt(src_lang: str, tgt_lang: str, old_domain: str, new_domain: str,
                         currency_from: str, currency_to: str, currency_label: str) -> str:
     return f"""
-You are a professional native‑level translator.
+You are a professional native-level translator.
 
 TASK:
-Translate every {src_lang} text node in the USER‑supplied HTML into natural, idiomatic {tgt_lang}.
+Translate every {src_lang} text node in the USER-supplied HTML into natural, idiomatic {tgt_lang}.
 Never shorten, summarise, or change meaning.
 
 STRUCTURAL RULES:
@@ -58,7 +58,7 @@ STRUCTURAL RULES:
 • Keep indentation and line breaks exactly as in the input.
 • Output raw HTML only – no markdown, no extra text.
 
-SEARCH‑AND‑REPLACE RULES:
+SEARCH-AND-REPLACE RULES:
 1. Change only the domain prefix in image/video URLs:
    '{old_domain}' → '{new_domain}'
 2. In [convert …] shortcodes:
@@ -66,7 +66,7 @@ SEARCH‑AND‑REPLACE RULES:
    – replace the trailing currency word (рублей, руб., RUR, etc.) with '{currency_label}'
 
 QUALITY:
-• Temperature 0, top_p 0 for deterministic output.
+• Temperature 0, top_p 0 for deterministic output.
 • If output would be truncated, respond ONLY with the word TRUNCATED so the caller can retry with smaller chunks.
 """
 
@@ -91,6 +91,18 @@ def split_html_into_chunks(html: str, max_tokens: int = TOKEN_LIMIT, safety: flo
 
 # ------------- Translation ------------------------------------------------------------
 
+def ensure_model_available(name: str, fallback: str) -> str:
+    """Return `name` if accessible to this key, else fallback."""
+    try:
+        client.models.retrieve(name)
+        return name
+    except Exception:
+        return fallback
+
+MODEL_TRANSLATE = ensure_model_available("gpt-4-1-mini", MODEL_TRANSLATE_DEFAULT)
+MODEL_QA = ensure_model_available("gpt-4-1", MODEL_QA_DEFAULT)
+
+
 def translate_chunk(chunk: str, system_prompt: str) -> str:
     resp = client.chat.completions.create(
         model=MODEL_TRANSLATE,
@@ -112,7 +124,7 @@ def translate_chunk(chunk: str, system_prompt: str) -> str:
 
 def qa_check(original: str, translation: str, src_lang: str, tgt_lang: str) -> str:
     qa_prompt = f"""
-You are a bilingual proof‑reader.
+You are a bilingual proof-reader.
 Compare the {src_lang} original and its {tgt_lang} translation.
 Spot mistranslations, omissions or meaning shifts.
 Output a numbered list: original sentence → suggested correction. If none, reply 'No issues found.'
@@ -132,7 +144,7 @@ Output a numbered list: original sentence → suggested correction. If none, rep
 # ------------- Streamlit UI -----------------------------------------------------------
 
 st.set_page_config(page_title="WP HTML Translator", layout="wide")
-st.title("📝 WordPress HTML Translator (GPT‑4‑1 mini)")
+st.title("📝 WordPress HTML Translator (GPT-powered)")
 
 st.markdown("Paste your HTML post and get a fully translated version with domain & currency swaps.")
 
@@ -144,7 +156,7 @@ with col1:
     old_domain = st.text_input("Old image domain", "https://samokatus.ru/wp-content/uploads/2025/07")
     currency_from = st.text_input("Currency shortcode FROM", "rub")
 with col2:
-    tgt_lang = st.selectbox("Target language", ["German", "Spanish", "French", "Turkish"])
+    tgt_lang = st.selectbox("Target language", ["German", "Spanish", "French", "Turkish", "English"])
     new_domain = st.text_input("New image domain", "https://tripsteer.co/wp-content/uploads/2025/07")
     currency_to = st.text_input("Currency shortcode TO", "usd")
     currency_label = st.text_input("Currency label", "USD")
@@ -156,7 +168,12 @@ if st.button("Translate"):
         st.warning("Please paste some HTML first.")
         st.stop()
 
-    system_prompt = build_system_prompt(src_lang, tgt_lang, old_domain, new_domain,
+    if src_lang == tgt_lang:
+        st.warning("Source and target languages are the same. Nothing to translate!")
+        st.stop()
+
+    system_prompt = build_system_prompt(src_lang, tgt_lang,
+                                        old_domain, new_domain,
                                         currency_from, currency_to, currency_label)
 
     chunks = split_html_into_chunks(html_input)

@@ -28,8 +28,8 @@ except ImportError:
 from openai import OpenAI
 
 # ------------- Model & token helpers -------------------------------------------------
-MODEL_TRANSLATE = "gpt-4-1-mini"
-MODEL_QA = "gpt-4-1"
+MODEL_TRANSLATE = "gpt-4o"          # or "gpt-4o-mini" / "gpt-4o-128k"
+MODEL_QA        = "gpt-4o"          # keep QA on the same model
 TOKEN_LIMIT = 96_000  # for gpt‑4‑1‑mini
 SAFETY_MARGIN = 0.85  # 15 % headroom
 

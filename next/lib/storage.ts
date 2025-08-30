@@ -43,11 +43,11 @@ export async function getByKey(key: string) {
 
 export async function listRecent(limit = 50) {
   if (hasKV()) {
-    const keys = await kv.zrange('tr_index', 0, limit - 1, { rev: true });
+    const keys = (await kv.zrange('tr_index', 0, limit - 1, { rev: true })) as unknown as string[];
     const items: { key: string; tgt: string; src: string; createdAt: string }[] = [];
     for (const key of keys) {
-      const it = await kv.hgetall<Record<string, string>>(`tr:${key}`);
-      if (it) items.push({ key, tgt: String(it.tgtLang), src: String(it.srcLang), createdAt: String(it.createdAt) });
+      const it = (await kv.hgetall(`tr:${key}`)) as unknown as Record<string, unknown> | null;
+      if (it) items.push({ key, tgt: String(it.tgtLang as unknown as string), src: String(it.srcLang as unknown as string), createdAt: String(it.createdAt as unknown as string) });
     }
     return items;
   }

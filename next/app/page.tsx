@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 
 type HistoryItem = { key: string; tgt: string; src: string; createdAt: string };
 
@@ -20,7 +20,9 @@ export default function Home() {
   const [curTo, setCurTo] = useState("usd");
   const [curLbl, setCurLbl] = useState("USD");
   const [removeConvert, setRemoveConvert] = useState(false);
-  const [runQa, setRunQa] = useState(true);
+  const [runQa, setRunQa] = useState(false);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const lastAddedKeyRef = useRef<string | null>(null);
 
   async function fetchHistory() {
     const r = await fetch("/api/history");
@@ -33,6 +35,7 @@ export default function Home() {
     try {
       // Optimistically add a placeholder history item so a new tab appears immediately
       const tempKey = `pending:${Date.now()}`;
+      lastAddedKeyRef.current = tempKey;
       setHist((prev) => [{ key: tempKey, tgt: tgtLang, src: srcLang, createdAt: new Date().toISOString() }, ...prev]);
 
       const r = await fetch("/api/translate", {
@@ -67,6 +70,14 @@ export default function Home() {
 
   useMemo(() => { fetchHistory(); }, []);
 
+  useEffect(() => {
+    // Auto-scroll to top where the newest item is added
+    if (listRef.current && lastAddedKeyRef.current) {
+      listRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      lastAddedKeyRef.current = null;
+    }
+  }, [hist.length]);
+
   return (
     <div className="app-grid">
       <aside className="sidebar">
@@ -75,12 +86,17 @@ export default function Home() {
           <input type="checkbox" checked={useCache} onChange={e => setUseCache(e.target.checked)} />
           Use cache if available
         </label>
-        <div className="history">
+        <div className="history" ref={listRef}>
           {hist.length === 0 && <div className="muted">No items</div>}
           {hist.map((h) => (
             <button key={h.key} onClick={() => loadItem(h.key)} className="history-item glass">
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{h.tgt} <span style={{ color: '#a4a8b4' }}>(src: {h.src})</span></div>
-              <div style={{ fontSize: 12, color: '#a4a8b4' }}>{h.createdAt}</div>
+              <div className="history-item-row">
+                <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {h.key.startsWith('pending:') && <span className="spinner" />}
+                  {h.tgt} <span style={{ color: '#a4a8b4' }}>(src: {h.src})</span>
+                </div>
+                <div className="history-item-meta">{h.createdAt}</div>
+              </div>
             </button>
           ))}
         </div>

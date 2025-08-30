@@ -77,6 +77,9 @@ body {
 }
 .history-item:hover { background: rgba(255,255,255,0.04); transform: translateY(-1px); }
 
+.history-item-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.history-item-meta { font-size: 12px; color: #a4a8b4; }
+
 .toggle {
   display: flex; align-items: center; gap: 8px; color: var(--muted);
 }
@@ -152,4 +155,16 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.03);
 }
+
+/* Pending spinner */
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
 

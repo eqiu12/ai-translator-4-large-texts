@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef, useEffect } from "react";
 
-type HistoryItem = { key: string; tgt: string; src: string; createdAt: string };
+type HistoryItem = { key: string; tgt: string; src: string; title?: string; createdAt: string };
 
 export default function Home() {
   const [htmlIn, setHtmlIn] = useState("");
@@ -93,7 +93,7 @@ export default function Home() {
               <div className="history-item-row">
                 <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
                   {h.key.startsWith('pending:') && <span className="spinner" />}
-                  {h.tgt} <span style={{ color: '#a4a8b4' }}>(src: {h.src})</span>
+                  {h.title ? h.title : h.tgt} <span style={{ color: '#a4a8b4' }}>(src: {h.src})</span>
                 </div>
                 <div className="history-item-meta">{h.createdAt}</div>
               </div>

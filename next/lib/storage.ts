@@ -6,6 +6,7 @@ export type StoredItem = {
   key: string;
   srcLang: string;
   tgtLang: string;
+  title: string;
   oldDom: string;
   newDom: string;
   curFrom: string;
@@ -57,20 +58,20 @@ export async function getByKey(key: string) {
 export async function listRecent(limit = 50) {
   if (hasKV()) {
     const keys = (await kv.zrange('tr_index', 0, limit - 1, { rev: true })) as unknown as string[];
-    const items: { key: string; tgt: string; src: string; createdAt: string }[] = [];
+    const items: { key: string; tgt: string; src: string; title: string; createdAt: string }[] = [];
     for (const key of keys) {
       const it = (await kv.hgetall(`tr:${key}`)) as unknown as Record<string, unknown> | null;
-      if (it) items.push({ key, tgt: String(it.tgtLang as unknown as string), src: String(it.srcLang as unknown as string), createdAt: String(it.createdAt as unknown as string) });
+      if (it) items.push({ key, tgt: String(it.tgtLang as unknown as string), src: String(it.srcLang as unknown as string), title: String(it.title as unknown as string || ''), createdAt: String(it.createdAt as unknown as string) });
     }
     return items;
   }
   const redis = getRedis();
   if (redis) {
     const keys = await redis.zrevrange('tr_index', 0, limit - 1);
-    const items: { key: string; tgt: string; src: string; createdAt: string }[] = [];
+    const items: { key: string; tgt: string; src: string; title: string; createdAt: string }[] = [];
     for (const key of keys) {
       const it = await redis.hgetall(`tr:${key}`);
-      if (it && Object.keys(it).length) items.push({ key, tgt: String(it.tgtLang), src: String(it.srcLang), createdAt: String(it.createdAt) });
+      if (it && Object.keys(it).length) items.push({ key, tgt: String(it.tgtLang), src: String(it.srcLang), title: String(it.title || ''), createdAt: String(it.createdAt) });
     }
     return items;
   }
@@ -112,10 +113,10 @@ function memGet(key: string) {
 
 function memList(limit: number) {
   const sorted = [...memIndex].sort((a, b) => b.score - a.score).slice(0, limit);
-  const items: { key: string; tgt: string; src: string; createdAt: string }[] = [];
+  const items: { key: string; tgt: string; src: string; title: string; createdAt: string }[] = [];
   for (const { key } of sorted) {
     const it = memStore.get(key);
-    if (it) items.push({ key, tgt: it.tgtLang, src: it.srcLang, createdAt: it.createdAt });
+    if (it) items.push({ key, tgt: it.tgtLang, src: it.srcLang, title: it.title, createdAt: it.createdAt });
   }
   return items;
 }

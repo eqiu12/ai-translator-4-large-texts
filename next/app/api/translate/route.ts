@@ -54,6 +54,20 @@ async function qaPass(srcHtml: string, tgtHtml: string, srcLang: string, tgtLang
   return (res.choices[0]?.message?.content ?? '').trim();
 }
 
+async function suggestTitle(htmlIn: string, srcLang: string, tgtLang: string) {
+  const prompt = `You will receive an HTML fragment. Create a very short, human-friendly title (max 8 words) summarizing the content to help identify it in a list. Keep it in ${tgtLang}. Do not include HTML tags or quotes.`;
+  const res = await callWithRetry(() => client.chat.completions.create({
+    model: MODEL_TRANSLATE,
+    temperature: 0.2,
+    messages: [
+      { role: 'system', content: prompt },
+      { role: 'user', content: htmlIn.slice(0, 4000) },
+    ],
+    response_format: { type: 'text' as const },
+  }));
+  return stripFences(res.choices[0]?.message?.content ?? '').slice(0, 120);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -79,7 +93,7 @@ export async function POST(req: NextRequest) {
     if (useCache) {
       const cached = await getByKey(key);
       if (cached) {
-        return NextResponse.json({ htmlOut: cached.htmlOut, qaReport: cached.qaReport, key });
+        return NextResponse.json({ htmlOut: (cached as any).htmlOut, qaReport: (cached as any).qaReport, key });
       }
     }
 
@@ -97,6 +111,7 @@ export async function POST(req: NextRequest) {
     }
     const full = stripFences(chunks.join('\n'));
     let report = '';
+    const title = await suggestTitle(htmlIn, srcLang, tgtLang).catch(() => `${tgtLang}`);
     if (runQa) {
       if (shouldChunkQA(preProcessed, full)) {
         // Chunked QA: sample first and last chunk, plus middle if large
@@ -118,6 +133,7 @@ export async function POST(req: NextRequest) {
       key,
       srcLang,
       tgtLang,
+      title,
       oldDom,
       newDom,
       curFrom,

@@ -2,12 +2,7 @@
 
 import { useState, useMemo } from "react";
 
-type HistoryItem = {
-  key: string;
-  tgt: string;
-  src: string;
-  createdAt: string;
-};
+type HistoryItem = { key: string; tgt: string; src: string; createdAt: string };
 
 export default function Home() {
   const [htmlIn, setHtmlIn] = useState("");
@@ -29,10 +24,7 @@ export default function Home() {
 
   async function fetchHistory() {
     const r = await fetch("/api/history");
-    if (r.ok) {
-      const data = await r.json();
-      setHist(data.items ?? []);
-    }
+    if (r.ok) setHist((await r.json()).items ?? []);
   }
 
   async function translate() {
@@ -42,19 +34,7 @@ export default function Home() {
       const r = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          htmlIn,
-          srcLang,
-          tgtLang,
-          oldDom,
-          newDom,
-          curFrom,
-          curTo,
-          curLbl,
-          removeConvertBlocks: removeConvert,
-          runQa,
-          useCache,
-        }),
+        body: JSON.stringify({ htmlIn, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert, runQa, useCache }),
       });
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
@@ -77,44 +57,44 @@ export default function Home() {
     }
   }
 
-  useMemo(() => {
-    fetchHistory();
-  }, []);
+  useMemo(() => { fetchHistory(); }, []);
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', height: '100vh' }}>
-      <aside style={{ borderRight: '1px solid #ddd', padding: 16, overflowY: 'auto' }}>
-        <h3>History</h3>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+    <div className="app-grid">
+      <aside className="sidebar">
+        <div className="brand">WP HTML Translator</div>
+        <label className="toggle">
           <input type="checkbox" checked={useCache} onChange={e => setUseCache(e.target.checked)} />
           Use cache if available
         </label>
-        <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-          {hist.length === 0 && <div>No items</div>}
+        <div className="history">
+          {hist.length === 0 && <div className="muted">No items</div>}
           {hist.map((h) => (
-            <button key={h.key} onClick={() => loadItem(h.key)} style={{ textAlign: 'left' }}>
-              {h.tgt} @ {h.createdAt} (src: {h.src})
+            <button key={h.key} onClick={() => loadItem(h.key)} className="history-item glass">
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{h.tgt} <span style={{ color: '#a4a8b4' }}>(src: {h.src})</span></div>
+              <div style={{ fontSize: 12, color: '#a4a8b4' }}>{h.createdAt}</div>
             </button>
           ))}
         </div>
       </aside>
-      <main style={{ padding: 16, overflow: 'auto' }}>
-        <h1>WP HTML Translator</h1>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <div>
+      <main className="main">
+        <div className="row-2">
+          <section className="panel glass">
+            <h3 className="section-title">Input</h3>
             <label>Input HTML</label>
-            <textarea value={htmlIn} onChange={e => setHtmlIn(e.target.value)} style={{ width: '100%', height: 300 }} />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+            <textarea className="textarea" value={htmlIn} onChange={e => setHtmlIn(e.target.value)} />
+
+            <div className="controls">
               <div>
                 <label>Source language</label>
-                <select value={srcLang} onChange={e => setSrcLang(e.target.value)}>
+                <select className="select" value={srcLang} onChange={e => setSrcLang(e.target.value)}>
                   <option>Russian</option>
                   <option>English</option>
                 </select>
               </div>
               <div>
                 <label>Target language</label>
-                <select value={tgtLang} onChange={e => setTgtLang(e.target.value)}>
+                <select className="select" value={tgtLang} onChange={e => setTgtLang(e.target.value)}>
                   <option>English</option>
                   <option>German</option>
                   <option>Spanish</option>
@@ -124,43 +104,45 @@ export default function Home() {
               </div>
               <div>
                 <label>Old image domain</label>
-                <input value={oldDom} onChange={e => setOldDom(e.target.value)} />
+                <input className="input" value={oldDom} onChange={e => setOldDom(e.target.value)} />
               </div>
               <div>
                 <label>New image domain</label>
-                <input value={newDom} onChange={e => setNewDom(e.target.value)} />
+                <input className="input" value={newDom} onChange={e => setNewDom(e.target.value)} />
               </div>
               <div>
                 <label>Currency shortcode FROM</label>
-                <input value={curFrom} onChange={e => setCurFrom(e.target.value)} />
+                <input className="input" value={curFrom} onChange={e => setCurFrom(e.target.value)} />
               </div>
               <div>
                 <label>Currency shortcode TO</label>
-                <input value={curTo} onChange={e => setCurTo(e.target.value)} />
+                <input className="input" value={curTo} onChange={e => setCurTo(e.target.value)} />
               </div>
               <div>
                 <label>Currency label</label>
-                <input value={curLbl} onChange={e => setCurLbl(e.target.value)} />
+                <input className="input" value={curLbl} onChange={e => setCurLbl(e.target.value)} />
               </div>
-              <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <label className="toggle">
                 <input type="checkbox" checked={removeConvert} onChange={e => setRemoveConvert(e.target.checked)} />
                 Remove [convert] shortcodes
               </label>
-              <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <label className="toggle">
                 <input type="checkbox" checked={runQa} onChange={e => setRunQa(e.target.checked)} />
                 Run QA pass
               </label>
             </div>
-            <button onClick={translate} disabled={loading} style={{ marginTop: 12 }}>
+
+            <button className="btn btn-primary" onClick={translate} disabled={loading} style={{ marginTop: 12 }}>
               {loading ? 'Translating…' : 'Translate'}
             </button>
-          </div>
-          <div>
+          </section>
+          <section className="panel glass">
+            <h3 className="section-title">Output</h3>
             <label>Output HTML</label>
-            <textarea value={htmlOut} onChange={e => setHtmlOut(e.target.value)} style={{ width: '100%', height: 300 }} />
+            <textarea className="textarea" value={htmlOut} onChange={e => setHtmlOut(e.target.value)} />
             <label>QA suggestions</label>
-            <textarea value={qaReport} onChange={e => setQaReport(e.target.value)} style={{ width: '100%', height: 160 }} />
-          </div>
+            <textarea className="textarea" style={{ minHeight: 140 }} value={qaReport} onChange={e => setQaReport(e.target.value)} />
+          </section>
         </div>
       </main>
     </div>

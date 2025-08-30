@@ -78,6 +78,23 @@ export async function listRecent(limit = 50) {
   return memList(limit);
 }
 
+export async function removeByKey(key: string) {
+  if (hasKV()) {
+    await kv.del(`tr:${key}`);
+    // @vercel/kv supports zrem
+    try { await kv.zrem('tr_index', key as any); } catch {}
+    return;
+  }
+  const redis = getRedis();
+  if (redis) {
+    await redis.del(`tr:${key}`);
+    await redis.zrem('tr_index', key);
+    return;
+  }
+  // memory
+  memDelete(key);
+}
+
 // ─────────── Local in-memory fallback for dev ───────────
 function hasKV() {
   return Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
@@ -119,5 +136,11 @@ function memList(limit: number) {
     if (it) items.push({ key, tgt: it.tgtLang, src: it.srcLang, title: it.title, createdAt: it.createdAt });
   }
   return items;
+}
+
+function memDelete(key: string) {
+  memStore.delete(key);
+  const idx = memIndex.findIndex(e => e.key === key);
+  if (idx >= 0) memIndex.splice(idx, 1);
 }
 

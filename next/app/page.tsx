@@ -78,6 +78,27 @@ export default function Home() {
     }
   }, [hist.length]);
 
+  function formatTime(iso: string) {
+    try {
+      const d = new Date(iso);
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      return `${dd}.${mm}, ${hh}:${mi}`;
+    } catch { return iso; }
+  }
+
+  async function onDelete(key: string) {
+    try {
+      const r = await fetch(`/api/item?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error(await r.text());
+      setHist(prev => prev.filter(h => h.key !== key));
+    } catch (e: any) {
+      alert(e.message || String(e));
+    }
+  }
+
   return (
     <div className="app-grid">
       <aside className="sidebar">
@@ -89,15 +110,20 @@ export default function Home() {
         <div className="history" ref={listRef}>
           {hist.length === 0 && <div className="muted">No items</div>}
           {hist.map((h) => (
-            <button key={h.key} onClick={() => loadItem(h.key)} className="history-item glass">
-              <div className="history-item-row">
-                <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div key={h.key} className="history-item glass" style={{ padding: 0 }}>
+              <div className="history-item-row" style={{ padding: '10px 12px' }}>
+                <button onClick={() => loadItem(h.key)} style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
                   {h.key.startsWith('pending:') && <span className="spinner" />}
-                  {h.title ? h.title : h.tgt} <span style={{ color: '#a4a8b4' }}>(src: {h.src})</span>
-                </div>
-                <div className="history-item-meta">{h.createdAt}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    {h.title ? h.title : h.tgt} <span style={{ color: '#a4a8b4' }}>(src: {h.src})</span>
+                  </div>
+                </button>
+                <div className="history-item-meta">{formatTime(h.createdAt)}</div>
+                {!h.key.startsWith('pending:') && (
+                  <button onClick={() => onDelete(h.key)} className="btn" title="Delete" style={{ height: 28, padding: '0 8px' }}>×</button>
+                )}
               </div>
-            </button>
+            </div>
           ))}
         </div>
       </aside>

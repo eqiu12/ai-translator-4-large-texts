@@ -31,6 +31,10 @@ export default function Home() {
     setLoading(true);
     setQaReport("");
     try {
+      // Optimistically add a placeholder history item so a new tab appears immediately
+      const tempKey = `pending:${Date.now()}`;
+      setHist((prev) => [{ key: tempKey, tgt: tgtLang, src: srcLang, createdAt: new Date().toISOString() }, ...prev]);
+
       const r = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -40,8 +44,12 @@ export default function Home() {
       const data = await r.json();
       setHtmlOut(data.htmlOut || "");
       setQaReport(data.qaReport || "");
-      fetchHistory();
+      // Refresh history and remove any pending placeholders
+      await fetchHistory();
+      setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));
     } catch (e: any) {
+      // Remove the optimistic placeholder if request fails
+      setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));
       alert(e.message || String(e));
     } finally {
       setLoading(false);

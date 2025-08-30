@@ -17,8 +17,14 @@ streamlit run wp_html_translator.py
 
 from __future__ import annotations
 
+import os
+import sqlite3
 import time
-from typing import List
+import json
+import hashlib
+import random
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 import streamlit as st
 
@@ -29,6 +35,11 @@ except ImportError:
     raise
 
 from openai import OpenAI, RateLimitError
+try:
+    from openai import APIError, APIConnectionError
+except Exception:  # older SDKs
+    APIError = Exception  # type: ignore
+    APIConnectionError = Exception  # type: ignore
 
 # ─────────────────────────── Config ────────────────────────────
 
@@ -126,14 +137,172 @@ def split_html(html: str, limit: int = TOKEN_LIMIT, margin: float = SAFETY_MARGI
         chunks.append(enc.decode(cur))
     return chunks
 
+# Persistence (SQLite) -----------------------------------------
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "translations.db")
+
+
+def init_db() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS translations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cache_key TEXT UNIQUE,
+                src_lang TEXT,
+                tgt_lang TEXT,
+                old_domain TEXT,
+                new_domain TEXT,
+                cur_from TEXT,
+                cur_to TEXT,
+                cur_label TEXT,
+                remove_convert_blocks INTEGER,
+                run_qa INTEGER,
+                model_translate TEXT,
+                model_qa TEXT,
+                html_in TEXT,
+                html_out TEXT,
+                qa_report TEXT,
+                created_at TEXT
+            )
+            """
+        )
+
+
+def compute_cache_key(
+    html_in: str,
+    src_lang: str,
+    tgt_lang: str,
+    old_dom: str,
+    new_dom: str,
+    cur_from: str,
+    cur_to: str,
+    cur_lbl: str,
+    remove_convert_blocks: bool,
+    run_qa: bool,
+    model_translate: str,
+    model_qa: str,
+) -> str:
+    payload = {
+        "html_in": html_in,
+        "src_lang": src_lang,
+        "tgt_lang": tgt_lang,
+        "old_dom": old_dom,
+        "new_dom": new_dom,
+        "cur_from": cur_from,
+        "cur_to": cur_to,
+        "cur_lbl": cur_lbl,
+        "remove_convert_blocks": remove_convert_blocks,
+        "run_qa": run_qa,
+        "model_translate": model_translate,
+        "model_qa": model_qa,
+    }
+    data = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def save_translation(
+    cache_key: str,
+    html_in: str,
+    html_out: str,
+    qa_report: Optional[str],
+    params: Tuple[str, str, str, str, str, str, str, bool, bool, str, str],
+) -> None:
+    (
+        src_lang,
+        tgt_lang,
+        old_dom,
+        new_dom,
+        cur_from,
+        cur_to,
+        cur_lbl,
+        remove_convert_blocks,
+        run_qa,
+        model_translate,
+        model_qa,
+    ) = params
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO translations (
+                cache_key, src_lang, tgt_lang, old_domain, new_domain,
+                cur_from, cur_to, cur_label, remove_convert_blocks, run_qa,
+                model_translate, model_qa, html_in, html_out, qa_report, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                html_out=excluded.html_out,
+                qa_report=excluded.qa_report,
+                created_at=excluded.created_at
+            """,
+            (
+                cache_key,
+                src_lang,
+                tgt_lang,
+                old_dom,
+                new_dom,
+                cur_from,
+                cur_to,
+                cur_lbl,
+                1 if remove_convert_blocks else 0,
+                1 if run_qa else 0,
+                model_translate,
+                model_qa,
+                html_in,
+                html_out,
+                qa_report or "",
+                datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            ),
+        )
+
+
+def get_translation_by_key(cache_key: str) -> Optional[Tuple[str, str]]:
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "SELECT html_out, qa_report FROM translations WHERE cache_key = ?",
+            (cache_key,),
+        )
+        row = cur.fetchone()
+        if row:
+            return row[0], row[1]
+    return None
+
+
+def list_recent(limit: int = 50) -> List[Tuple[str, str, str, str]]:
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            """
+            SELECT cache_key, tgt_lang, created_at, src_lang
+            FROM translations
+            ORDER BY datetime(created_at) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [(r[0], r[1], r[2], r[3]) for r in cur.fetchall()]
+
+
+def strip_fences(text: str) -> str:
+    t = text.strip()
+    if t.startswith("```"):
+        # Remove starting fence with optional language
+        t = t.split("\n", 1)[1] if "\n" in t else ""
+    if t.endswith("```"):
+        t = t.rsplit("\n", 1)[0]
+    return t.strip()
+
+
 # OpenAI call helpers ------------------------------------------
 
 def with_retry(func, *args, **kwargs):
     for attempt in range(MAX_RETRIES):
         try:
             return func(*args, **kwargs)
-        except RateLimitError:
-            time.sleep(2 ** attempt)
+        except (RateLimitError, APIError, APIConnectionError):
+            sleep_s = (2 ** attempt) + random.uniform(0, 0.5)
+            time.sleep(sleep_s)
+        except Exception:
+            # Non-transient; rethrow
+            raise
     raise RuntimeError("OpenAI call failed after retries.")
 
 
@@ -149,7 +318,7 @@ def translate_chunk(chunk: str, prompt: str) -> str:
     ).choices[0].message.content
     if out.strip() == "TRUNCATED":
         raise ValueError("Chunk too large – lower SAFETY_MARGIN.")
-    return out
+    return strip_fences(out)
 
 
 def qa_pass(src_html: str, tgt_html: str, src_lang: str, tgt_lang: str) -> str:
@@ -167,8 +336,15 @@ def qa_pass(src_html: str, tgt_html: str, src_lang: str, tgt_lang: str) -> str:
 
 # ─────────────────────────── UI ────────────────────────────
 
+init_db()
+
 st.set_page_config(page_title="WP HTML Translator", layout="wide")
 st.title("📝 WP HTML Translator – Localisation & retries")
+
+if "output_html" not in st.session_state:
+    st.session_state.output_html = ""
+if "qa_report" not in st.session_state:
+    st.session_state.qa_report = ""
 
 html_in = st.text_area("Input HTML", height=400)
 col1, col2 = st.columns(2)
@@ -185,33 +361,120 @@ with col2:
 remove_convert_blocks = st.checkbox("Remove [convert] currency shortcodes (delete the whole parentheses/label)", value=False)
 run_qa = st.checkbox("Run QA pass", value=True)
 
+with st.sidebar:
+    st.header("History")
+    use_cache = st.checkbox("Use cached translation if available", value=True)
+    recent = list_recent(50)
+    labels = [f"{i+1:02d}. {tgt} @ {created} (src: {src})" for i, (_, tgt, created, src) in enumerate(recent)]
+    selected_idx = st.selectbox("Recent translations", list(range(len(labels))), format_func=lambda i: labels[i] if labels else "—", index=0 if labels else 0)
+    selected_key = recent[selected_idx][0] if recent else None
+    if st.button("Load selected to Output") and selected_key:
+        loaded = get_translation_by_key(selected_key)
+        if loaded:
+            st.session_state.output_html, st.session_state.qa_report = loaded[0], loaded[1]
+            st.success("Loaded saved translation into Output.")
+
 if st.button("Translate"):
-    if not html_in.strip():
-        st.warning("Paste HTML first.")
-        st.stop()
-    if src_lang == tgt_lang:
-        st.warning("Source and target are the same – nothing to translate.")
-        st.stop()
+    try:
+        if not html_in.strip():
+            st.warning("Paste HTML first.")
+            st.stop()
+        if src_lang == tgt_lang:
+            st.warning("Source and target are the same – nothing to translate.")
+            st.stop()
 
-    prompt = build_system_prompt(src_lang, tgt_lang, old_dom, new_dom, cur_from, cur_to, cur_lbl, remove_convert_blocks)
-    parts  = split_html(html_in)
+        cache_key = compute_cache_key(
+            html_in,
+            src_lang,
+            tgt_lang,
+            old_dom,
+            new_dom,
+            cur_from,
+            cur_to,
+            cur_lbl,
+            remove_convert_blocks,
+            run_qa,
+            MODEL_TRANSLATE,
+            MODEL_QA,
+        )
 
-    st.info(f"Translating {len(parts)} chunk(s)…")
-    prog = st.progress(0.)
-    out_parts: List[str] = []
-    for i, part in enumerate(parts, 1):
-        with st.spinner(f"Chunk {i}/{len(parts)}…"):
-            out_parts.append(translate_chunk(part, prompt))
-        prog.progress(i / len(parts))
+        if use_cache:
+            cached = get_translation_by_key(cache_key)
+            if cached:
+                st.info("Loaded from cache.")
+                st.session_state.output_html, st.session_state.qa_report = cached[0], cached[1]
+            else:
+                prompt = build_system_prompt(src_lang, tgt_lang, old_dom, new_dom, cur_from, cur_to, cur_lbl, remove_convert_blocks)
+                parts  = split_html(html_in)
 
-    full_out = "\n".join(out_parts)
+                st.info(f"Translating {len(parts)} chunk(s)…")
+                prog = st.progress(0.)
+                out_parts: List[str] = []
+                for i, part in enumerate(parts, 1):
+                    with st.spinner(f"Chunk {i}/{len(parts)}…"):
+                        out_parts.append(translate_chunk(part, prompt))
+                    prog.progress(i / len(parts))
 
-    if run_qa:
-        st.subheader("QA pass")
-        with st.spinner("Proof-reading…"):
-            report = qa_pass(html_in, full_out, src_lang, tgt_lang)
-        st.text_area("QA suggestions", report, height=200)
+                full_out = strip_fences("\n".join(out_parts))
+                qa_text = ""
+                if run_qa:
+                    st.subheader("QA pass")
+                    with st.spinner("Proof-reading…"):
+                        qa_text = qa_pass(html_in, full_out, src_lang, tgt_lang)
+                    st.text_area("QA suggestions", qa_text, height=200)
 
-    st.success("Done ✅")
-    st.text_area("Output HTML", full_out, height=400)
-    st.download_button("💾 Download HTML", full_out, file_name=f"translated_{tgt_lang.lower()}.html", mime="text/html")
+                st.session_state.output_html = full_out
+                st.session_state.qa_report = qa_text
+
+                save_translation(
+                    cache_key,
+                    html_in,
+                    st.session_state.output_html,
+                    st.session_state.qa_report,
+                    (
+                        src_lang,
+                        tgt_lang,
+                        old_dom,
+                        new_dom,
+                        cur_from,
+                        cur_to,
+                        cur_lbl,
+                        remove_convert_blocks,
+                        run_qa,
+                        MODEL_TRANSLATE,
+                        MODEL_QA,
+                    ),
+                )
+                st.success("Saved translation.")
+        else:
+            prompt = build_system_prompt(src_lang, tgt_lang, old_dom, new_dom, cur_from, cur_to, cur_lbl, remove_convert_blocks)
+            parts  = split_html(html_in)
+
+            st.info(f"Translating {len(parts)} chunk(s)…")
+            prog = st.progress(0.)
+            out_parts: List[str] = []
+            for i, part in enumerate(parts, 1):
+                with st.spinner(f"Chunk {i}/{len(parts)}…"):
+                    out_parts.append(translate_chunk(part, prompt))
+                prog.progress(i / len(parts))
+
+            full_out = strip_fences("\n".join(out_parts))
+            qa_text = ""
+            if run_qa:
+                st.subheader("QA pass")
+                with st.spinner("Proof-reading…"):
+                    qa_text = qa_pass(html_in, full_out, src_lang, tgt_lang)
+                st.text_area("QA suggestions", qa_text, height=200)
+
+            st.session_state.output_html = full_out
+            st.session_state.qa_report = qa_text
+
+            st.success("Done ✅")
+    except ValueError as e:
+        st.error(str(e))
+    except Exception as e:
+        st.error(f"Translation failed: {e}")
+
+st.text_area("Output HTML", st.session_state.output_html, height=400)
+if st.session_state.output_html:
+    st.download_button("💾 Download HTML", st.session_state.output_html, file_name=f"translated_{tgt_lang.lower()}.html", mime="text/html")

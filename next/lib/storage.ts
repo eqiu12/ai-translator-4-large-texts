@@ -1,0 +1,88 @@
+import { kv } from '@vercel/kv';
+import crypto from 'crypto';
+
+export type StoredItem = {
+  key: string;
+  srcLang: string;
+  tgtLang: string;
+  oldDom: string;
+  newDom: string;
+  curFrom: string;
+  curTo: string;
+  curLbl: string;
+  removeConvertBlocks: boolean;
+  runQa: boolean;
+  htmlIn: string;
+  htmlOut: string;
+  qaReport: string;
+  createdAt: string;
+};
+
+export function computeKey(payload: Record<string, unknown>): string {
+  const json = JSON.stringify(payload, Object.keys(payload).sort());
+  return crypto.createHash('sha256').update(json).digest('hex');
+}
+
+export async function save(item: StoredItem) {
+  if (hasKV()) {
+    await kv.hset(`tr:${item.key}`, item as any);
+    await kv.zadd('tr_index', { score: Date.parse(item.createdAt), member: item.key });
+    return;
+  }
+  memSave(item);
+}
+
+export async function getByKey(key: string) {
+  if (hasKV()) {
+    const res = await kv.hgetall<Record<string, string>>(`tr:${key}`);
+    if (!res) return null;
+    return res;
+  }
+  return memGet(key);
+}
+
+export async function listRecent(limit = 50) {
+  if (hasKV()) {
+    const keys = await kv.zrevrange<string[]>('tr_index', 0, limit - 1);
+    const items: { key: string; tgt: string; src: string; createdAt: string }[] = [];
+    for (const key of keys) {
+      const it = await kv.hgetall<Record<string, string>>(`tr:${key}`);
+      if (it) items.push({ key, tgt: String(it.tgtLang), src: String(it.srcLang), createdAt: String(it.createdAt) });
+    }
+    return items;
+  }
+  return memList(limit);
+}
+
+// ─────────── Local in-memory fallback for dev ───────────
+function hasKV() {
+  return Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
+}
+
+const memStore = new Map<string, StoredItem>();
+const memIndex: { key: string; score: number }[] = [];
+
+function memSave(item: StoredItem) {
+  memStore.set(item.key, item);
+  const score = Date.parse(item.createdAt);
+  const existingIdx = memIndex.findIndex((e) => e.key === item.key);
+  if (existingIdx >= 0) memIndex.splice(existingIdx, 1);
+  memIndex.push({ key: item.key, score });
+}
+
+function memGet(key: string) {
+  const it = memStore.get(key);
+  if (!it) return null;
+  return it as unknown as Record<string, string>;
+}
+
+function memList(limit: number) {
+  const sorted = [...memIndex].sort((a, b) => b.score - a.score).slice(0, limit);
+  const items: { key: string; tgt: string; src: string; createdAt: string }[] = [];
+  for (const { key } of sorted) {
+    const it = memStore.get(key);
+    if (it) items.push({ key, tgt: it.tgtLang, src: it.srcLang, createdAt: it.createdAt });
+  }
+  return items;
+}
+

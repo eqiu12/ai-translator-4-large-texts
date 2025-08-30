@@ -43,7 +43,7 @@ export async function getByKey(key: string) {
 
 export async function listRecent(limit = 50) {
   if (hasKV()) {
-    const keys = await kv.zrevrange<string[]>('tr_index', 0, limit - 1);
+    const keys = await kv.zrange('tr_index', 0, limit - 1, { rev: true });
     const items: { key: string; tgt: string; src: string; createdAt: string }[] = [];
     for (const key of keys) {
       const it = await kv.hgetall<Record<string, string>>(`tr:${key}`);

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
+export const dynamic = 'force-dynamic';
 
 type HistoryItem = { key: string; tgt: string; src: string; title?: string; createdAt: string };
 
@@ -68,7 +69,7 @@ export default function Home() {
     }
   }
 
-  useMemo(() => { fetchHistory(); }, []);
+  useEffect(() => { fetchHistory(); }, []);
 
   useEffect(() => {
     // Auto-scroll to top where the newest item is added

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { buildSystemPrompt, stripFences } from '@/lib/prompt';
-import { splitHtmlByChars } from '@/lib/chunk';
+import { splitHtmlSmart, shouldChunkQA, deterministicDomainSwap } from '@/lib/chunk';
 import { computeKey, getByKey, save } from '@/lib/storage';
 
 const MODEL_TRANSLATE = process.env.MODEL_PREF_TRANSLATE || 'gpt-4o-mini';
@@ -30,7 +30,6 @@ async function translateChunk(chunk: string, prompt: string) {
   const res = await callWithRetry(() => client.chat.completions.create({
     model: MODEL_TRANSLATE,
     temperature: 0,
-    top_p: 0,
     messages: [
       { role: 'system', content: prompt },
       { role: 'user', content: chunk },
@@ -43,11 +42,10 @@ async function translateChunk(chunk: string, prompt: string) {
 }
 
 async function qaPass(srcHtml: string, tgtHtml: string, srcLang: string, tgtLang: string) {
-  const qaPrompt = `You are a bilingual proof-reader. List mistranslations or omissions between SOURCE (${srcLang}) and TARGET (${tgtLang}). If all good, reply 'No issues found.'`;
+  const qaPrompt = `You are a bilingual proof-reader. List mismatches between SOURCE (${srcLang}) and TARGET (${tgtLang}). If all good, reply 'No issues found.'`;
   const res = await callWithRetry(() => client.chat.completions.create({
     model: MODEL_QA,
     temperature: 0,
-    top_p: 0,
     messages: [
       { role: 'system', content: qaPrompt },
       { role: 'user', content: `SOURCE:\n${srcHtml}\n\nTARGET:\n${tgtHtml}` },
@@ -85,16 +83,35 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const parts = splitHtmlByChars(htmlIn, TOKEN_LIMIT, SAFETY_MARGIN);
+    // Deterministic pre-process: swap domains before sending to LLM
+    const preProcessed = deterministicDomainSwap(htmlIn, oldDom, newDom);
+
+    const parts = splitHtmlSmart(preProcessed, TOKEN_LIMIT, SAFETY_MARGIN);
     const chunks: string[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const out = await translateChunk(parts[i], prompt);
-      chunks.push(out);
+    // Limited concurrency: 3 at a time
+    const concurrency = 3;
+    for (let i = 0; i < parts.length; i += concurrency) {
+      const slice = parts.slice(i, i + concurrency);
+      const results = await Promise.all(slice.map(p => translateChunk(p, prompt)));
+      chunks.push(...results);
     }
     const full = stripFences(chunks.join('\n'));
     let report = '';
     if (runQa) {
-      report = await qaPass(htmlIn, full, srcLang, tgtLang);
+      if (shouldChunkQA(preProcessed, full)) {
+        // Chunked QA: sample first and last chunk, plus middle if large
+        const qParts = splitHtmlSmart(preProcessed, TOKEN_LIMIT, 0.25);
+        const oParts = splitHtmlSmart(full, TOKEN_LIMIT, 0.25);
+        const idxs = qParts.length >= 3 ? [0, Math.floor(qParts.length / 2), qParts.length - 1] : [0];
+        const issues: string[] = [];
+        for (const idx of idxs) {
+          const sec = await qaPass(qParts[idx] || '', oParts[idx] || '', srcLang, tgtLang);
+          if (sec && sec !== 'No issues found.') issues.push(`[Section ${idx + 1}]\n${sec}`);
+        }
+        report = issues.length ? issues.join('\n\n') : 'No issues found.';
+      } else {
+        report = await qaPass(preProcessed, full, srcLang, tgtLang);
+      }
     }
 
     await save({

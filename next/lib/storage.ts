@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import Redis from 'ioredis';
 import crypto from 'crypto';
 
 export type StoredItem = {
@@ -29,6 +30,12 @@ export async function save(item: StoredItem) {
     await kv.zadd('tr_index', { score: Date.parse(item.createdAt), member: item.key });
     return;
   }
+  const redis = getRedis();
+  if (redis) {
+    await redis.hset(`tr:${item.key}`, item as unknown as Record<string, string>);
+    await redis.zadd('tr_index', Date.parse(item.createdAt), item.key);
+    return;
+  }
   memSave(item);
 }
 
@@ -37,6 +44,12 @@ export async function getByKey(key: string) {
     const res = await kv.hgetall<Record<string, string>>(`tr:${key}`);
     if (!res) return null;
     return res;
+  }
+  const redis = getRedis();
+  if (redis) {
+    const it = await redis.hgetall(`tr:${key}`);
+    if (!it || !Object.keys(it).length) return null;
+    return it as unknown as Record<string, string>;
   }
   return memGet(key);
 }
@@ -51,12 +64,33 @@ export async function listRecent(limit = 50) {
     }
     return items;
   }
+  const redis = getRedis();
+  if (redis) {
+    const keys = await redis.zrevrange('tr_index', 0, limit - 1);
+    const items: { key: string; tgt: string; src: string; createdAt: string }[] = [];
+    for (const key of keys) {
+      const it = await redis.hgetall(`tr:${key}`);
+      if (it && Object.keys(it).length) items.push({ key, tgt: String(it.tgtLang), src: String(it.srcLang), createdAt: String(it.createdAt) });
+    }
+    return items;
+  }
   return memList(limit);
 }
 
 // ─────────── Local in-memory fallback for dev ───────────
 function hasKV() {
   return Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
+}
+
+function getRedis(): Redis | null {
+  const url = process.env.REDIS_URL || process.env.UPSTASH_REDIS_URL || process.env.REDIS_TLS_URL;
+  if (!url) return null;
+  try {
+    const client = new Redis(url, { maxRetriesPerRequest: 2, enableAutoPipelining: true });
+    return client;
+  } catch {
+    return null;
+  }
 }
 
 const memStore = new Map<string, StoredItem>();

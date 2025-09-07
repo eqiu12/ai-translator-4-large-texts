@@ -55,28 +55,61 @@ export default function Home() {
       const data = await r.json();
       const cacheKey = data.key || `ad-hoc-${Date.now()}`;
 
-      // Split locally by simple slices to avoid long server timeouts; ~8k chars per chunk
-      const approx = 8000;
+      // Split locally by simple slices to avoid timeouts; ~3k chars per chunk
+      const approx = 3000;
       const localParts: string[] = [];
       for (let i = 0; i < htmlIn.length; i += approx) localParts.push(htmlIn.slice(i, i + approx));
 
-      const outParts: string[] = [];
-      for (const p of localParts) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 55_000); // edge 60s max
-        const rr = await fetch('/api/translate/chunk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chunk: p, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert }), signal: controller.signal });
-        clearTimeout(timeout);
-        if (!rr.ok) throw new Error(await rr.text());
-        const jd = await rr.json();
-        outParts.push(jd.out || '');
+      const outParts: string[] = new Array(localParts.length);
+      // Limit concurrency to 2
+      const concurrency = 2;
+      let idx = 0;
+      async function worker() {
+        while (true) {
+          const myIdx = idx++;
+          if (myIdx >= localParts.length) break;
+          const p = localParts[myIdx];
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 50_000);
+          const rr = await fetch('/api/translate/chunk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chunk: p, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert }), signal: controller.signal });
+          clearTimeout(timeout);
+          if (!rr.ok) throw new Error(await rr.text());
+          const jd = await rr.json();
+          outParts[myIdx] = jd.out || '';
+        }
       }
+      const workers = Array.from({ length: Math.min(concurrency, localParts.length) }, () => worker());
+      await Promise.all(workers);
       const full = outParts.join('\n');
       setHtmlOut(full);
 
       let report = '';
       if (runQa) {
-        const qr = await fetch('/api/qa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src: htmlIn, tgt: full, srcLang, tgtLang }) });
-        if (qr.ok) report = (await qr.json()).report || '';
+        if ((htmlIn.length + full.length) > 20000) {
+          // Chunked QA: first, middle, last
+          const sections: Array<[string, string]> = [];
+          const qPartsIn: string[] = [];
+          const qPartsOut: string[] = [];
+          for (let i = 0; i < htmlIn.length; i += approx) qPartsIn.push(htmlIn.slice(i, i + approx));
+          for (let i = 0; i < full.length; i += approx) qPartsOut.push(full.slice(i, i + approx));
+          const pick = (arr: string[]) => arr.length >= 3 ? [0, Math.floor(arr.length / 2), arr.length - 1] : [0];
+          const idxs = Array.from(new Set([...pick(qPartsIn), ...pick(qPartsOut)]));
+          const partsReports: string[] = [];
+          for (const iSec of idxs) {
+            const si = qPartsIn[iSec] || '';
+            const so = qPartsOut[iSec] || '';
+            const qr = await fetch('/api/qa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src: si, tgt: so, srcLang, tgtLang }) });
+            if (qr.ok) {
+              const rj = await qr.json();
+              const sec = rj.report || '';
+              if (sec && sec !== 'No issues found.') partsReports.push(`[Section ${iSec + 1}]\n${sec}`);
+            }
+          }
+          report = partsReports.length ? partsReports.join('\n\n') : 'No issues found.';
+        } else {
+          const qr = await fetch('/api/qa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src: htmlIn, tgt: full, srcLang, tgtLang }) });
+          if (qr.ok) report = (await qr.json()).report || '';
+        }
         setQaReport(report);
       }
 

@@ -24,6 +24,10 @@ export default function Home() {
   const [runQa, setRunQa] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const lastAddedKeyRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const cancelRequestedRef = useRef<boolean>(false);
+  const [currentChunk, setCurrentChunk] = useState(0);
+  const [totalChunks, setTotalChunks] = useState(0);
 
   async function fetchHistory() {
     const r = await fetch("/api/history");
@@ -34,6 +38,9 @@ export default function Home() {
     setLoading(true);
     setQaReport("");
     try {
+      cancelRequestedRef.current = false;
+      setCurrentChunk(0);
+      setTotalChunks(0);
       // Optimistically add a placeholder history item so a new tab appears immediately
       const tempKey = `pending:${Date.now()}`;
       lastAddedKeyRef.current = tempKey;
@@ -79,28 +86,23 @@ export default function Home() {
         }
       }
 
-      // Initial coarse split; ~2k chars
+      // Initial coarse split; ~2k chars, sequential processing
       const approx = 2000;
       const localParts: string[] = [];
       for (let i = 0; i < htmlIn.length; i += approx) localParts.push(htmlIn.slice(i, i + approx));
+      setTotalChunks(localParts.length);
 
       const outParts: string[] = new Array(localParts.length);
-      const concurrency = 2;
-      let idx = 0;
-      async function worker() {
-        while (true) {
-          const myIdx = idx++;
-          if (myIdx >= localParts.length) break;
-          outParts[myIdx] = await translatePart(localParts[myIdx]);
-        }
+      for (let i = 0; i < localParts.length; i++) {
+        if (cancelRequestedRef.current) throw new Error('Cancelled');
+        setCurrentChunk(i + 1);
+        outParts[i] = await translatePart(localParts[i]);
       }
-      const workers = Array.from({ length: Math.min(concurrency, localParts.length) }, () => worker());
-      await Promise.all(workers);
       const full = outParts.join('\n');
       setHtmlOut(full);
 
       let report = '';
-      if (runQa) {
+      if (runQa && !cancelRequestedRef.current) {
         if ((htmlIn.length + full.length) > 20000) {
           // Chunked QA: first, middle, last
           const sections: Array<[string, string]> = [];
@@ -129,16 +131,25 @@ export default function Home() {
         setQaReport(report);
       }
 
-      // Save result now so history updates immediately
-      await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: cacheKey, srcLang, tgtLang, title, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert, runQa, htmlIn, htmlOut: full, qaReport: report, createdAt: new Date().toISOString() }) });
-      await fetchHistory();
-      setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));
+      // Save result now so history updates immediately (if not cancelled)
+      if (!cancelRequestedRef.current) {
+        await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: cacheKey, srcLang, tgtLang, title, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert, runQa, htmlIn, htmlOut: full, qaReport: report, createdAt: new Date().toISOString() }) });
+        await fetchHistory();
+        setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));
+      }
     } catch (e: any) {
       // Remove the optimistic placeholder if request fails
       setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));
-      alert(e.message || String(e));
+      if (e?.message === 'Cancelled') {
+        alert('Translation cancelled');
+      } else {
+        alert(e.message || String(e));
+      }
     } finally {
+      abortRef.current?.abort();
       setLoading(false);
+      setCurrentChunk(0);
+      setTotalChunks(0);
     }
   }
 
@@ -180,6 +191,11 @@ export default function Home() {
     } catch (e: any) {
       alert(e.message || String(e));
     }
+  }
+
+  function handleCancel() {
+    cancelRequestedRef.current = true;
+    abortRef.current?.abort();
   }
 
   return (
@@ -265,9 +281,19 @@ export default function Home() {
               </label>
             </div>
 
-            <button className="btn btn-primary" onClick={translate} disabled={loading} style={{ marginTop: 12 }}>
-              {loading ? 'Translating…' : 'Translate'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+              <button className="btn btn-primary" onClick={translate} disabled={loading}>
+                {loading ? 'Translating…' : 'Translate'}
+              </button>
+              {loading && (
+                <>
+                  <span className="history-item-meta">
+                    {currentChunk > 0 && totalChunks > 0 ? `Chunk ${currentChunk}/${totalChunks}` : 'Preparing…'}
+                  </span>
+                  <button className="btn" onClick={handleCancel}>Cancel</button>
+                </>
+              )}
+            </div>
           </section>
           <section className="panel glass">
             <h3 className="section-title">Output</h3>

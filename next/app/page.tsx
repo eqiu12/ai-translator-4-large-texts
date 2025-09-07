@@ -49,15 +49,38 @@ export default function Home() {
       const r = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ htmlIn, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert, runQa, useCache }),
+        body: JSON.stringify({ htmlIn, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert, runQa: false, useCache, dryRun: true }),
       });
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
-      setHtmlOut(data.htmlOut || "");
-      setQaReport(data.qaReport || "");
-      // Refresh history and remove any pending placeholders
+      const cacheKey = data.key || `ad-hoc-${Date.now()}`;
+
+      // Split locally by simple slices to avoid long server timeouts; ~12k chars per chunk
+      const approx = 12000;
+      const localParts: string[] = [];
+      for (let i = 0; i < htmlIn.length; i += approx) localParts.push(htmlIn.slice(i, i + approx));
+
+      const outParts: string[] = [];
+      for (const p of localParts) {
+        const rr = await fetch('/api/translate/chunk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chunk: p, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert }) });
+        if (!rr.ok) throw new Error(await rr.text());
+        const jd = await rr.json();
+        outParts.push(jd.out || '');
+      }
+      const full = outParts.join('\n');
+      setHtmlOut(full);
+
+      let report = '';
+      if (runQa) {
+        const qr = await fetch('/api/qa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src: htmlIn, tgt: full, srcLang, tgtLang }) });
+        if (qr.ok) report = (await qr.json()).report || '';
+        setQaReport(report);
+      }
+
+      // Save result now so history updates immediately
+      await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: cacheKey, srcLang, tgtLang, title, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert, runQa, htmlIn, htmlOut: full, qaReport: report, createdAt: new Date().toISOString() }) });
       await fetchHistory();
-      setHist((prev) => prev.map(h => h.key.startsWith('pending:') ? { ...h, title: title || h.title } : h).filter((h) => !h.key.startsWith('pending:')));
+      setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));
     } catch (e: any) {
       // Remove the optimistic placeholder if request fails
       setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));

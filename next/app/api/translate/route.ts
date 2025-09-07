@@ -83,6 +83,7 @@ export async function POST(req: NextRequest) {
       removeConvertBlocks,
       runQa,
       useCache,
+      dryRun,
     } = body as Record<string, any>;
 
     if (!htmlIn || !srcLang || !tgtLang) return NextResponse.json({ error: 'Missing params' }, { status: 400 });
@@ -95,6 +96,11 @@ export async function POST(req: NextRequest) {
       if (cached) {
         return NextResponse.json({ htmlOut: (cached as any).htmlOut, qaReport: (cached as any).qaReport, key });
       }
+    }
+
+    // If client only needs the cache key, return early to avoid long-running request
+    if (dryRun) {
+      return NextResponse.json({ key });
     }
 
     // Deterministic pre-process: swap domains before sending to LLM

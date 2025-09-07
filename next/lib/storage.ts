@@ -1,6 +1,4 @@
 import { kv } from '@vercel/kv';
-import Redis from 'ioredis';
-import crypto from 'crypto';
 
 export type StoredItem = {
   key: string;
@@ -22,19 +20,18 @@ export type StoredItem = {
 
 export function computeKey(payload: Record<string, unknown>): string {
   const json = JSON.stringify(payload, Object.keys(payload).sort());
-  return crypto.createHash('sha256').update(json).digest('hex');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < json.length; i++) {
+    hash ^= json.charCodeAt(i);
+    hash = (hash >>> 0) * 0x01000193;
+  }
+  return ('0000000' + (hash >>> 0).toString(16)).slice(-8);
 }
 
 export async function save(item: StoredItem) {
   if (hasKV()) {
     await kv.hset(`tr:${item.key}`, item as any);
     await kv.zadd('tr_index', { score: Date.parse(item.createdAt), member: item.key });
-    return;
-  }
-  const redis = getRedis();
-  if (redis) {
-    await redis.hset(`tr:${item.key}`, item as unknown as Record<string, string>);
-    await redis.zadd('tr_index', Date.parse(item.createdAt), item.key);
     return;
   }
   memSave(item);
@@ -45,12 +42,6 @@ export async function getByKey(key: string) {
     const res = await kv.hgetall<Record<string, string>>(`tr:${key}`);
     if (!res) return null;
     return res;
-  }
-  const redis = getRedis();
-  if (redis) {
-    const it = await redis.hgetall(`tr:${key}`);
-    if (!it || !Object.keys(it).length) return null;
-    return it as unknown as Record<string, string>;
   }
   return memGet(key);
 }
@@ -65,16 +56,6 @@ export async function listRecent(limit = 50) {
     }
     return items;
   }
-  const redis = getRedis();
-  if (redis) {
-    const keys = await redis.zrevrange('tr_index', 0, limit - 1);
-    const items: { key: string; tgt: string; src: string; title: string; createdAt: string }[] = [];
-    for (const key of keys) {
-      const it = await redis.hgetall(`tr:${key}`);
-      if (it && Object.keys(it).length) items.push({ key, tgt: String(it.tgtLang), src: String(it.srcLang), title: String(it.title || ''), createdAt: String(it.createdAt) });
-    }
-    return items;
-  }
   return memList(limit);
 }
 
@@ -85,12 +66,6 @@ export async function removeByKey(key: string) {
     try { await kv.zrem('tr_index', key as any); } catch {}
     return;
   }
-  const redis = getRedis();
-  if (redis) {
-    await redis.del(`tr:${key}`);
-    await redis.zrem('tr_index', key);
-    return;
-  }
   // memory
   memDelete(key);
 }
@@ -98,17 +73,6 @@ export async function removeByKey(key: string) {
 // ─────────── Local in-memory fallback for dev ───────────
 function hasKV() {
   return Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
-}
-
-function getRedis(): Redis | null {
-  const url = process.env.REDIS_URL || process.env.UPSTASH_REDIS_URL || process.env.REDIS_TLS_URL;
-  if (!url) return null;
-  try {
-    const client = new Redis(url, { maxRetriesPerRequest: 2, enableAutoPipelining: true });
-    return client;
-  } catch {
-    return null;
-  }
 }
 
 const memStore = new Map<string, StoredItem>();

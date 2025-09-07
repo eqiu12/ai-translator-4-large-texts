@@ -39,6 +39,13 @@ export default function Home() {
       lastAddedKeyRef.current = tempKey;
       setHist((prev) => [{ key: tempKey, tgt: tgtLang, src: srcLang, createdAt: new Date().toISOString() }, ...prev]);
 
+      // Generate a short title upfront (non-blocking)
+      let title = '';
+      try {
+        const tr = await fetch('/api/title', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ htmlIn, tgtLang }) });
+        if (tr.ok) title = (await tr.json()).title || '';
+      } catch {}
+
       const r = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -50,7 +57,7 @@ export default function Home() {
       setQaReport(data.qaReport || "");
       // Refresh history and remove any pending placeholders
       await fetchHistory();
-      setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));
+      setHist((prev) => prev.map(h => h.key.startsWith('pending:') ? { ...h, title: title || h.title } : h).filter((h) => !h.key.startsWith('pending:')));
     } catch (e: any) {
       // Remove the optimistic placeholder if request fails
       setHist((prev) => prev.filter((h) => !h.key.startsWith('pending:')));

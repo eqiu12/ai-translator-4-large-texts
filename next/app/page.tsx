@@ -55,27 +55,43 @@ export default function Home() {
       const data = await r.json();
       const cacheKey = data.key || `ad-hoc-${Date.now()}`;
 
-      // Split locally by simple slices to avoid timeouts; ~3k chars per chunk
-      const approx = 3000;
+      // Recursive client-side translator for robustness under timeouts
+      async function translatePart(text: string, minSize = 800): Promise<string> {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 45_000);
+          const rr = await fetch('/api/translate/chunk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chunk: text, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          if (!rr.ok) throw new Error(await rr.text());
+          const jd = await rr.json();
+          return jd.out || '';
+        } catch (e) {
+          if (text.length <= minSize) throw e;
+          const mid = Math.floor(text.length / 2);
+          const a = await translatePart(text.slice(0, mid), minSize);
+          const b = await translatePart(text.slice(mid), minSize);
+          return a + '\n' + b;
+        }
+      }
+
+      // Initial coarse split; ~2k chars
+      const approx = 2000;
       const localParts: string[] = [];
       for (let i = 0; i < htmlIn.length; i += approx) localParts.push(htmlIn.slice(i, i + approx));
 
       const outParts: string[] = new Array(localParts.length);
-      // Limit concurrency to 2
       const concurrency = 2;
       let idx = 0;
       async function worker() {
         while (true) {
           const myIdx = idx++;
           if (myIdx >= localParts.length) break;
-          const p = localParts[myIdx];
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 50_000);
-          const rr = await fetch('/api/translate/chunk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chunk: p, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert }), signal: controller.signal });
-          clearTimeout(timeout);
-          if (!rr.ok) throw new Error(await rr.text());
-          const jd = await rr.json();
-          outParts[myIdx] = jd.out || '';
+          outParts[myIdx] = await translatePart(localParts[myIdx]);
         }
       }
       const workers = Array.from({ length: Math.min(concurrency, localParts.length) }, () => worker());

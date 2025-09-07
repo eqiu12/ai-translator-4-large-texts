@@ -55,8 +55,8 @@ export default function Home() {
       const data = await r.json();
       const cacheKey = data.key || `ad-hoc-${Date.now()}`;
 
-      // Split locally by simple slices to avoid long server timeouts; ~12k chars per chunk
-      const approx = 12000;
+      // Split locally by simple slices to avoid long server timeouts; ~8k chars per chunk
+      const approx = 8000;
       const localParts: string[] = [];
       for (let i = 0; i < htmlIn.length; i += approx) localParts.push(htmlIn.slice(i, i + approx));
 

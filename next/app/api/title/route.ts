@@ -5,6 +5,9 @@ import { stripFences } from '@/lib/prompt';
 const MODEL_TRANSLATE = process.env.MODEL_PREF_TRANSLATE || 'gpt-4o-mini';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+export const runtime = 'edge';
+export const maxDuration = 60;
+
 async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   let attempt = 0;
   for (;;) {

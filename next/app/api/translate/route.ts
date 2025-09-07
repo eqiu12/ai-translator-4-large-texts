@@ -12,6 +12,9 @@ const SAFETY_MARGIN = 0.5;
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+export const runtime = 'edge';
+export const maxDuration = 60;
+
 async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   let attempt = 0;
   for (;;) {

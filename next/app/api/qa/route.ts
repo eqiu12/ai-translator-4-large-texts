@@ -4,6 +4,9 @@ import OpenAI from 'openai';
 const MODEL_QA = process.env.MODEL_PREF_QA || 'gpt-4o';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+export const runtime = 'edge';
+export const maxDuration = 60;
+
 async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   let attempt = 0;
   for (;;) {

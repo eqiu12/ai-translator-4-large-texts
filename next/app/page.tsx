@@ -62,7 +62,10 @@ export default function Home() {
 
       const outParts: string[] = [];
       for (const p of localParts) {
-        const rr = await fetch('/api/translate/chunk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chunk: p, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert }) });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 55_000); // edge 60s max
+        const rr = await fetch('/api/translate/chunk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chunk: p, srcLang, tgtLang, oldDom, newDom, curFrom, curTo, curLbl, removeConvertBlocks: removeConvert }), signal: controller.signal });
+        clearTimeout(timeout);
         if (!rr.ok) throw new Error(await rr.text());
         const jd = await rr.json();
         outParts.push(jd.out || '');

@@ -6,6 +6,9 @@ const MODEL_TRANSLATE = process.env.MODEL_PREF_TRANSLATE || 'gpt-4o-mini';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+export const runtime = 'edge';
+export const maxDuration = 60;
+
 async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   let attempt = 0;
   for (;;) {
@@ -30,7 +33,7 @@ async function translateOnce(prompt: string, text: string) {
   return res.choices[0]?.message?.content ?? '';
 }
 
-async function translateWithSplit(prompt: string, text: string, maxChars = 6000): Promise<string> {
+async function translateWithSplit(prompt: string, text: string, maxChars = 4000): Promise<string> {
   if (text.length <= maxChars) {
     const out = await translateOnce(prompt, text);
     if (out.trim() === 'TRUNCATED') {
